@@ -1,10 +1,25 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity, useColorScheme } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, useColorScheme, ActivityIndicator, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+
+interface LibraryItem {
+  id: string;
+  title: string;
+  type: 'Quiz' | 'Flashcards' | 'Notes';
+  date: string;
+  score?: string;
+  count?: string;
+}
+
+const API_URL = process.env.EXPO_PUBLIC_API_URL;
 
 export default function LibraryScreen() {
   const scheme = useColorScheme();
   const isDark = scheme === 'dark';
+  const [library, setLibrary] = useState<LibraryItem[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const COLORS = {
     bg: isDark ? '#09090b' : '#f9fafb',
@@ -16,12 +31,31 @@ export default function LibraryScreen() {
   };
 
   const styles = createStyles(COLORS);
+  const router = useRouter();
 
-  const mockLibrary = [
-    { id: '1', title: 'World War II History', type: 'Quiz', date: '2026-05-03', score: '80%' },
-    { id: '2', title: 'Cell Biology Vocab', type: 'Flashcards', date: '2026-05-02', count: '15 cards' },
-    { id: '3', title: 'Macroeconomics 101', type: 'Notes', date: '2026-05-01' },
-  ];
+  const fetchLibrary = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/library`);
+      const data = await res.json();
+      setLibrary(data);
+    } catch (e) {
+      Alert.alert("Sync Error", "Failed to fetch library items.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleItemPress = (item: LibraryItem) => {
+    router.push({
+      pathname: '/',
+      params: { libraryId: item.id, type: item.type }
+    });
+  };
+
+  useEffect(() => {
+    fetchLibrary();
+  }, []);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -30,19 +64,27 @@ export default function LibraryScreen() {
           <Text style={styles.title}>Your Library</Text>
           <Text style={styles.subtitle}>Saved AI Knowledge</Text>
         </View>
-        <TouchableOpacity style={styles.syncBtn}>
-          <Ionicons name="sync" size={20} color={COLORS.accent} />
+        <TouchableOpacity style={styles.syncBtn} onPress={fetchLibrary} disabled={loading}>
+          {loading ? (
+            <ActivityIndicator size="small" color={COLORS.accent} />
+          ) : (
+            <Ionicons name="sync" size={20} color={COLORS.accent} />
+          )}
         </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        {mockLibrary.map((item) => (
-          <TouchableOpacity key={item.id} style={styles.itemCard}>
+        {library.map((item) => (
+          <TouchableOpacity 
+            key={item.id} 
+            style={styles.itemCard}
+            onPress={() => handleItemPress(item)}
+          >
             <View style={styles.iconContainer}>
-              <Ionicons 
-                name={item.type === 'Quiz' ? 'help-circle' : item.type === 'Flashcards' ? 'layers' : 'document-text'} 
-                size={24} 
-                color={COLORS.accent} 
+              <Ionicons
+                name={item.type === 'Quiz' ? 'help-circle' : item.type === 'Flashcards' ? 'layers' : 'document-text'}
+                size={24}
+                color={COLORS.accent}
               />
             </View>
             <View style={{ flex: 1 }}>

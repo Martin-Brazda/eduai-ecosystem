@@ -14,6 +14,13 @@ import uuid
 
 from pipeline import run_pipeline
 from llm_client import get_client
+from database import get_db, engine, Base
+from db_models import LibraryItem
+from sqlalchemy.orm import Session
+from fastapi import Depends
+
+# Initialize Database
+Base.metadata.create_all(bind=engine)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,7 +83,9 @@ async def process_batch(
     text_content: str = Form(None, description="Optional raw text content."),
     mode: str = Form(..., description="Desired output: 'quiz' or 'notes'."),
     prompt_instruction: str = Form(""), 
-    difficulty: str = Form("medium")
+    difficulty: str = Form("medium"),
+    count: int = Form(5, description="Number of items to generate (e.g. questions or flashcards)."),
+    db: Session = Depends(get_db)
 ):
     try:
         get_client()
@@ -103,6 +112,7 @@ async def process_batch(
             task_prompt=task_prompt, 
             instruction=prompt_instruction,
             difficulty=difficulty,
+            count=count,
             request_id=request_id,
             extracted_text=text_content
         )
@@ -151,6 +161,7 @@ async def process_batch(
                 "task_prompt": task_prompt,
                 "instruction": prompt_instruction,
                 "difficulty": difficulty,
+                "count": count,
                 "request_id": request_id
             }
 
@@ -194,7 +205,59 @@ async def process_batch(
     elif has_error:
         status_code = 207 # partial failures
 
+    # Persistence logic: Save successful results to the library
+    for res in final_output:
+        if res.get("status") == "success":
+            try:
+                data = res.get("data")
+                # Attempt to extract a title
+                title = "Untitled"
+                if mode == "quiz":
+                    title = data.get("quiz_title") or "New Quiz"
+                elif mode == "flashcards":
+                    title = data.get("title") or "New Flashcards"
+                elif mode == "notes":
+                    title = "AI Notes" # Notes structure is often just a result string
+                
+                db_item = LibraryItem(
+                    id=str(uuid.uuid4()),
+                    title=title,
+                    type=mode.capitalize(),
+                    data=data
+                )
+                db.add(db_item)
+            except Exception as e:
+                logger.error(f"Failed to save item to database: {e}")
+    
+    try:
+        db.commit()
+    except Exception as e:
+        logger.error(f"Database commit failed: {e}")
+        db.rollback()
+
     return JSONResponse(content=final_output, status_code=status_code)
+
+@app.get("/library")
+def get_library(db: Session = Depends(get_db)):
+    # Return only metadata to keep the list response lightweight
+    items = db.query(LibraryItem).order_by(LibraryItem.date.desc()).all()
+    return [
+        {
+            "id": item.id,
+            "title": item.title,
+            "type": item.type,
+            "date": item.date.strftime("%Y-%m-%d")
+        } for item in items
+    ]
+
+@app.get("/library/{item_id}")
+def get_library_item(item_id: str, db: Session = Depends(get_db)):
+    logger.info(f"Fetching library item with ID: {item_id}")
+    item = db.query(LibraryItem).filter(LibraryItem.id == item_id).first()
+    if not item:
+        logger.warning(f"Library item not found: {item_id}")
+        raise HTTPException(status_code=404, detail="Library item not found")
+    return item.to_dict()
 
 @app.get("/health")
 def health_check():

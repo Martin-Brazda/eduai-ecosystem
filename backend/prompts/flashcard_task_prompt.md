@@ -6,7 +6,7 @@ Input Content:
 Target Learning Level: {{DIFFICULTY}}
 Additional Instructions: {{INSTRUCTION}}
 
-Goal: Create a set of 10-15 flashcards that capture the core facts, terminology, and key dates/events from the input content. 
+Goal: Create the requested number of flashcards that capture the core facts, terminology, and key dates/events from the input content. 
 
 Instructions for difficulty:
 - easy: Focus on broad terms and basic definitions.

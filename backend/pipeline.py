@@ -70,29 +70,32 @@ async def generate_notes_with_retry(summary: str, system_prompt: str, task_promp
                 logger.error(f"[{request_id}] Failed to generate valid notes after {max_retries} attempts.")
                 raise RuntimeError(f"Failed to generate valid notes after {max_retries} attempts. Last error: {str(e)}")
 
-async def generate_quiz_with_retry(summary: str, system_prompt: str, task_prompt: str, instruction: str, difficulty: str, request_id: str) -> dict:
+async def generate_quiz_with_retry(summary: str, system_prompt: str, task_prompt: str, instruction: str, difficulty: str, count: int, request_id: str) -> dict:
     """Step 3 (Quiz): Generate a JSON quiz with robust validation and retries."""
-    logger.info(f"[{request_id}] Step 3 started: Generating Quiz (Difficulty: {difficulty}) with retries...")
+    logger.info(f"[{request_id}] Step 3 started: Generating Quiz (Difficulty: {difficulty}, Count: {count}) with retries...")
     start_time = time.perf_counter()
     max_retries = 3
     
-    difficulty_instruction = f"The questions should be of {difficulty.upper()} difficulty."
+    difficulty_instruction = f"The questions should be of {difficulty.upper()} difficulty. GENERATE EXACTLY {count} QUESTIONS."
     full_instruction = f"{instruction}\n{difficulty_instruction}"
     
     formatted_task_prompt = task_prompt.format(
         user_instruction=full_instruction,
-        json_schema="{}" # Keeping for compatibility if the original prompt requires it
+        json_schema="{}" 
     )
+    
+    # Adding a very explicit count instruction to the system prompt part
+    system_prompt_with_count = f"{system_prompt}\n\nCRITICAL: You MUST generate exactly {count} items. No more, no less."
     
     for attempt in range(1, max_retries + 1):
         dynamic_instruction = ""
         if attempt == 2:
             dynamic_instruction = "\n\nCRITICAL: STRICT JSON ONLY. Ensure NO markdown blocks (```json) are in the output. ONLY raw JSON."
         elif attempt == 3:
-            dynamic_instruction = "\n\nCRITICAL: MINIMUM 5 QUESTIONS REQUIRED. Ensure options are not empty and correct answers are valid indices."
+            dynamic_instruction = f"\n\nCRITICAL: GENERATE EXACTLY {count} QUESTIONS. Ensure options are not empty and correct answers are valid indices."
             
         contents = [
-            {"text": system_prompt},
+            {"text": system_prompt_with_count},
             {"text": summary},
             {"text": formatted_task_prompt + dynamic_instruction}
         ]
@@ -104,7 +107,13 @@ async def generate_quiz_with_retry(summary: str, system_prompt: str, task_prompt
             clean_json = result_text.strip().replace("```json", "").replace("```", "")
             valid_quiz_data = validate_quiz(clean_json)
             
-            num_questions = len(valid_quiz_data.get('questions', []))
+            # Slicing or checking count
+            questions = valid_quiz_data.get('questions', [])
+            if len(questions) != count:
+                logger.warning(f"[{request_id}] AI generated {len(questions)} questions instead of {count}. Adjusting...")
+                valid_quiz_data['questions'] = questions[:count]
+            
+            num_questions = len(valid_quiz_data['questions'])
             elapsed = time.perf_counter() - start_time
             logger.info(f"[{request_id}] Step 3 completed in {elapsed:.2f}s on attempt {attempt}. Generated {num_questions} questions.")
             return valid_quiz_data
@@ -115,27 +124,29 @@ async def generate_quiz_with_retry(summary: str, system_prompt: str, task_prompt
                 logger.error(f"[{request_id}] Failed to generate valid quiz after {max_retries} attempts.")
                 raise RuntimeError(f"Failed to generate valid quiz after {max_retries} attempts. Last error: {str(e)}")
 
-async def generate_flashcards_with_retry(summary: str, system_prompt: str, task_prompt: str, instruction: str, difficulty: str, request_id: str) -> dict:
+async def generate_flashcards_with_retry(summary: str, system_prompt: str, task_prompt: str, instruction: str, difficulty: str, count: int, request_id: str) -> dict:
     """Step 3 (Flashcards): Generate a JSON flashcard set with robust validation and retries."""
-    logger.info(f"[{request_id}] Step 3 started: Generating Flashcards (Difficulty: {difficulty}) with retries...")
+    logger.info(f"[{request_id}] Step 3 started: Generating Flashcards (Difficulty: {difficulty}, Count: {count}) with retries...")
     start_time = time.perf_counter()
     max_retries = 3
     
     formatted_task_prompt = task_prompt.format(
         INPUT_CONTENT=summary,
         DIFFICULTY=difficulty,
-        INSTRUCTION=instruction
+        INSTRUCTION=f"{instruction}. GENERATE EXACTLY {count} FLASHCARDS."
     )
+    
+    system_prompt_with_count = f"{system_prompt}\n\nCRITICAL: You MUST generate exactly {count} flashcards. No more, no less."
     
     for attempt in range(1, max_retries + 1):
         dynamic_instruction = ""
         if attempt == 2:
             dynamic_instruction = "\n\nCRITICAL: STRICT JSON ONLY. Ensure NO markdown blocks (```json) are in the output. ONLY raw JSON."
         elif attempt == 3:
-            dynamic_instruction = "\n\nCRITICAL: MINIMUM 5 FLASHCARDS REQUIRED. Ensure front and back are not empty."
+            dynamic_instruction = f"\n\nCRITICAL: GENERATE EXACTLY {count} FLASHCARDS. Ensure front and back are not empty."
             
         contents = [
-            {"text": system_prompt},
+            {"text": system_prompt_with_count},
             {"text": summary},
             {"text": formatted_task_prompt + dynamic_instruction}
         ]
@@ -147,7 +158,12 @@ async def generate_flashcards_with_retry(summary: str, system_prompt: str, task_
             clean_json = result_text.strip().replace("```json", "").replace("```", "")
             valid_flashcards = validate_flashcards(clean_json)
             
-            num_cards = len(valid_flashcards.get('cards', []))
+            cards = valid_flashcards.get('cards', [])
+            if len(cards) != count:
+                logger.warning(f"[{request_id}] AI generated {len(cards)} flashcards instead of {count}. Adjusting...")
+                valid_flashcards['cards'] = cards[:count]
+            
+            num_cards = len(valid_flashcards['cards'])
             elapsed = time.perf_counter() - start_time
             logger.info(f"[{request_id}] Step 3 completed in {elapsed:.2f}s on attempt {attempt}. Generated {num_cards} flashcards.")
             return valid_flashcards
@@ -182,7 +198,7 @@ def try_local_pdf_extraction(file_bytes: bytes, request_id: str) -> str:
         logger.warning(f"[{request_id}] Local PDF extraction failed: {str(e)}")
         return ""
 
-async def run_pipeline(file_part, mode: str, system_prompt: str, task_prompt: str, instruction: str, difficulty: str, request_id: str, file_bytes: bytes = None, extracted_text: str = None):
+async def run_pipeline(file_part, mode: str, system_prompt: str, task_prompt: str, instruction: str, difficulty: str, count: int, request_id: str, file_bytes: bytes = None, extracted_text: str = None):
     """
     Main orchestrator for the AI Workflow.
     """
@@ -205,13 +221,13 @@ async def run_pipeline(file_part, mode: str, system_prompt: str, task_prompt: st
         summary = await generate_summary_step(extracted_text, request_id)
         
         if mode == "quiz":
-            result = await generate_quiz_with_retry(summary, system_prompt, task_prompt, instruction, difficulty, request_id)
+            result = await generate_quiz_with_retry(summary, system_prompt, task_prompt, instruction, difficulty, count, request_id)
             final_data = {"status": "success", "data": result}
         elif mode == "notes":
             result = await generate_notes_with_retry(summary, system_prompt, task_prompt, instruction, request_id)
             final_data = {"status": "success", "data": {"result": result}}
         elif mode == "flashcards":
-            result = await generate_flashcards_with_retry(summary, system_prompt, task_prompt, instruction, difficulty, request_id)
+            result = await generate_flashcards_with_retry(summary, system_prompt, task_prompt, instruction, difficulty, count, request_id)
             final_data = {"status": "success", "data": result}
         else:
             raise ValueError(f"Unknown mode: {mode}")

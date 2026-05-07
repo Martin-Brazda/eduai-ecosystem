@@ -1,14 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import React, { useState } from 'react';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useState, useEffect } from 'react';
 import Markdown from 'react-native-markdown-display';
 import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -17,8 +17,10 @@ import {
   useColorScheme,
   View
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-const API_URL = 'http://192.168.0.110:8080/process-batch';
+
+const API_URL = process.env.EXPO_PUBLIC_API_URL ? `${process.env.EXPO_PUBLIC_API_URL}/process-batch` : 'http://localhost:8080/process-batch';
 const createId = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
 
 export default function App() {
@@ -28,6 +30,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [showAiOptions, setShowAiOptions] = useState(false);
   const [difficulty, setDifficulty] = useState('medium');
+  const [itemCount, setItemCount] = useState('5');
   const [additionalPrompt, setAdditionalPrompt] = useState('');
 
   const [workspace, setWorkspace] = useState({
@@ -54,6 +57,51 @@ export default function App() {
   };
 
   const styles = createStyles(COLORS);
+  const { libraryId, type } = useLocalSearchParams();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (libraryId) {
+      loadLibraryItem(libraryId as string);
+    }
+  }, [libraryId]);
+
+  const loadLibraryItem = async (id: string) => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL.replace('/process-batch', '')}/library/${id}`);
+      if (!res.ok) {
+        throw new Error(`Item not found (Status: ${res.status})`);
+      }
+      const item = await res.json();
+      
+      if (!item || !item.type) {
+        throw new Error('Invalid item data structure');
+      }
+
+      const mode = item.type.toLowerCase();
+      const data = item.data;
+
+      if (mode === 'quiz') {
+        setQuiz(data);
+        setScreen('quiz');
+      } else if (mode === 'flashcards') {
+        setFlashcardSet(data);
+        setScreen('flashcards');
+      } else if (mode === 'notes') {
+        setGeneratedNotes(data.result);
+        setScreen('notes');
+      }
+      
+      // Clear params after loading
+      router.setParams({ libraryId: undefined, type: undefined });
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert('Load Error', e.message || 'Failed to load library item.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const pickImages = async () => {
     const res = await ImagePicker.launchImageLibraryAsync({
@@ -114,6 +162,8 @@ export default function App() {
     formData.append('mode', mode);
     formData.append('prompt_instruction', additionalPrompt || 'Analyze these documents.');
     formData.append('difficulty', difficulty);
+    formData.append('count', itemCount);
+
 
     try {
       const res = await fetch(API_URL, {
@@ -122,6 +172,9 @@ export default function App() {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       const data = await res.json();
+      if (!Array.isArray(data)) {
+        throw new Error('Invalid response format from server');
+      }
       const firstSuccess = data.find((r: any) => r.status === 'success');
 
       if (firstSuccess) {
@@ -206,6 +259,23 @@ export default function App() {
                 </TouchableOpacity>
               ))}
             </View>
+
+            <Text style={styles.label}>Generation Count</Text>
+            <View style={styles.countRow}>
+              <TouchableOpacity onPress={() => setItemCount(Math.max(1, parseInt(itemCount || '0') - 1).toString())} style={styles.countBtn}>
+                <Ionicons name="remove" size={20} color={COLORS.text} />
+              </TouchableOpacity>
+              <TextInput
+                style={styles.countInput}
+                keyboardType="numeric"
+                value={itemCount}
+                onChangeText={setItemCount}
+              />
+              <TouchableOpacity onPress={() => setItemCount((parseInt(itemCount || '0') + 1).toString())} style={styles.countBtn}>
+                <Ionicons name="add" size={20} color={COLORS.text} />
+              </TouchableOpacity>
+            </View>
+
             <TextInput
               style={styles.promptInput}
               placeholder="Custom Instructions..."
@@ -215,14 +285,13 @@ export default function App() {
             />
             <View style={styles.actionRow}>
               <TouchableOpacity style={[styles.mainBtn, { backgroundColor: COLORS.bg, borderWidth: 1, borderColor: COLORS.border, flex: 0.8 }]} onPress={() => sendToAI('notes')}>
-                <Ionicons name="document-text" size={18} color={COLORS.text} style={{ marginRight: 4 }} />
                 <Text style={[styles.mainBtnText, { color: COLORS.text }]}>Notes</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.mainBtn, { backgroundColor: COLORS.bg, borderWidth: 1, borderColor: COLORS.border, flex: 1 }]} onPress={() => sendToAI('flashcards')}>
                 <Text style={[styles.mainBtnText, { color: COLORS.text }]}>Flashcards</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.mainBtn, { flex: 1 }]} onPress={() => sendToAI('quiz')}>
-                <Text style={styles.mainBtnText}>Quiz</Text>
+              <TouchableOpacity style={[styles.mainBtn, { backgroundColor: COLORS.bg, borderWidth: 1, borderColor: COLORS.border, flex: 1 }]} onPress={() => sendToAI('quiz')}>
+                <Text style={[styles.mainBtnText, { color: COLORS.text }]}>Quiz</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -317,11 +386,11 @@ export default function App() {
           </TouchableOpacity>
           <Text style={styles.quizTitle}>Card {currentCardIndex + 1}/{flashcardSet.cards.length}</Text>
         </View>
-        
+
         <View style={{ flex: 1, padding: 24, justifyContent: 'center' }}>
-          <TouchableOpacity 
+          <TouchableOpacity
             activeOpacity={0.9}
-            style={[styles.flashcard, isFlipped && styles.flashcardFlipped]} 
+            style={[styles.flashcard, isFlipped && styles.flashcardFlipped]}
             onPress={() => setIsFlipped(!isFlipped)}
           >
             <Text style={styles.flashcardLabel}>{isFlipped ? 'ANSWER' : 'QUESTION'}</Text>
@@ -332,8 +401,8 @@ export default function App() {
         </View>
 
         <View style={{ padding: 24, flexDirection: 'row', gap: 12 }}>
-          <TouchableOpacity 
-            style={[styles.nextBtn, { flex: 1, backgroundColor: COLORS.paper, borderWidth: 1, borderColor: COLORS.border }]} 
+          <TouchableOpacity
+            style={[styles.nextBtn, { flex: 1, backgroundColor: COLORS.paper, borderWidth: 1, borderColor: COLORS.border }]}
             onPress={() => {
               setIsFlipped(false);
               if (currentCardIndex > 0) setCurrentCardIndex(currentCardIndex - 1);
@@ -341,8 +410,8 @@ export default function App() {
           >
             <Text style={[styles.nextBtnText, { color: COLORS.text }]}>Previous</Text>
           </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.nextBtn, { flex: 1 }]} 
+          <TouchableOpacity
+            style={[styles.nextBtn, { flex: 1 }]}
             onPress={() => {
               setIsFlipped(false);
               if (currentCardIndex < flashcardSet.cards.length - 1) {
@@ -444,6 +513,9 @@ const createStyles = (COLORS: any) => StyleSheet.create({
   actionRow: { flexDirection: 'row', gap: 12 },
   mainBtn: { flex: 1, height: 56, backgroundColor: COLORS.accent, borderRadius: 18, alignItems: 'center', justifyContent: 'center', shadowColor: COLORS.accent, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.3, shadowRadius: 15 },
   mainBtnText: { color: '#fff', fontWeight: '900', fontSize: 15 },
+  countRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 24, backgroundColor: COLORS.inputBg, borderRadius: 16, padding: 8 },
+  countBtn: { width: 40, height: 40, borderRadius: 12, backgroundColor: COLORS.paper, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: COLORS.border },
+  countInput: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '800', color: COLORS.text },
   loadingOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 20 },
   loadingText: { color: COLORS.text, fontSize: 14, fontWeight: '700' },
   quizHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingTop: 20, marginBottom: 20 },
